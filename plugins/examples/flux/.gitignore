@@ -172,34 +172,3 @@ cython_debug/
 
 # PyPI configuration file
 .pypirc
-
-# Ignore config file that may contain sensitive API keys
-config.json
-
-# Ignore build artifacts
-dist/
-build/
-*.spec
-
-# Ignore Python cache
-__pycache__/
-*.pyc
-*.pyo
-*.pyd
-.Python
-*.so
-
-# Ignore virtual environment
-.venv/
-venv/
-env/
-
-# Ignore logs
-*.log
-
-# Ignore generated images
-*.png
-*.jpg
-*.jpeg
-
-config.json

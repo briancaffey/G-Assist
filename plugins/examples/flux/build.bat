@@ -18,26 +18,70 @@ set PYTHON=python3
 :build
 set VENV=.venv
 set DIST_DIR=dist
-set FLUX_DIR=%DIST_DIR%\flux
+:: Replace 'plugin' with the name of your plugin
+set PLUGIN_DIR=%DIST_DIR%\flux
+set NVIDIA_PLUGIN_DIR=C:\ProgramData\NVIDIA Corporation\nvtopps\rise\plugins\flux
+
 if exist %VENV% (
 	call %VENV%\Scripts\activate.bat
 
-	:: Ensure flux subfolder exists
-	if not exist "%FLUX_DIR%" mkdir "%FLUX_DIR%"
+	:: Ensure plugin subfolder exists
+	if not exist "%PLUGIN_DIR%" mkdir "%PLUGIN_DIR%"
 
-	pyinstaller --onefile --name g-assist-plugin-flux --distpath "%FLUX_DIR%" plugin.py
+	:: Replace 'g-assist-plugin' with the name of your plugin
+	pyinstaller --onefile --name g-assist-plugin-flux --distpath "%PLUGIN_DIR%" plugin.py
 	if exist manifest.json (
-		copy /y manifest.json "%FLUX_DIR%\manifest.json"
+		copy /y manifest.json "%PLUGIN_DIR%\manifest.json"
 		echo manifest.json copied successfully.
-	) else (
-		echo {} > manifest.json
-		echo Created a blank manifest.json file.	
-		copy /y manifest.json "%FLUX_DIR%\manifest.json"
-		echo manifest.json copied successfully.
-	)
+	) 
+
+	if exist config.json (
+		copy /y config.json "%PLUGIN_DIR%\config.json"
+		echo config.json copied successfully.
+	) 
 
 	call %VENV%\Scripts\deactivate.bat
-	echo Plugin can be found in the "%FLUX_DIR%" directory
+	echo Executable can be found in the "%PLUGIN_DIR%" directory
+	
+	:: Auto-deploy to NVIDIA directory
+	echo.
+	echo Deploying to NVIDIA directory...
+	
+	:: Create NVIDIA plugin directory if it doesn't exist
+	if not exist "%NVIDIA_PLUGIN_DIR%" (
+		mkdir "%NVIDIA_PLUGIN_DIR%"
+		echo Created NVIDIA plugin directory: %NVIDIA_PLUGIN_DIR%
+	)
+	
+	:: Copy manifest.json
+	if exist "%PLUGIN_DIR%\manifest.json" (
+		copy /y "%PLUGIN_DIR%\manifest.json" "%NVIDIA_PLUGIN_DIR%\manifest.json"
+		echo manifest.json deployed to NVIDIA directory.
+	)
+	
+	:: Copy executable
+	if exist "%PLUGIN_DIR%\g-assist-plugin-flux.exe" (
+		copy /y "%PLUGIN_DIR%\g-assist-plugin-flux.exe" "%NVIDIA_PLUGIN_DIR%\g-assist-plugin-flux.exe"
+		if %ERRORLEVEL% EQU 0 (
+			echo g-assist-plugin-flux1.exe deployed to NVIDIA directory.
+		) else (
+			echo.
+			echo ERROR: Could not copy g-assist-plugin-flux1.exe
+			echo The file may be in use by G-Assist. Please:
+			echo 1. Close G-Assist completely
+			echo 2. Run build.bat again
+			echo.
+		)
+	)
+	
+	:: Copy config.json if it exists
+	if exist "%PLUGIN_DIR%\config.json" (
+		copy /y "%PLUGIN_DIR%\config.json" "%NVIDIA_PLUGIN_DIR%\config.json"
+		echo config.json deployed to NVIDIA directory.
+	)
+	
+	echo.
+	echo Deployment complete! Plugin is ready to use.
 	exit /b 0
 ) else (
 	echo Please run setup.bat before attempting to build
@@ -46,4 +90,4 @@ if exist %VENV% (
 
 :nopython
 echo Python needs to be installed and in your path
-exit /b 1 
+exit /b 1

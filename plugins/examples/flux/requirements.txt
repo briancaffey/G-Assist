@@ -13,7 +13,8 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+# python_requires='>=3.12'  # If using the 'type' keyword
+# OR
+# python_requires='>=3.7'   # If using the alternative TypeAlias or Dict annotation
 pywin32>=223  # For Windows-specific functionality (windll)
 pyinstaller==6.11.0
-Pillow>=10.0.0  # For image creation and manipulation
-requests>=2.31.0  # For HTTP requests to Flux NIM API

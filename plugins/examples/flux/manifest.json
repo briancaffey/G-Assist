@@ -1,58 +1,70 @@
 {
   "manifestVersion": 1,
-  "executable": "./g-assist-plugin-python.exe",
+  "executable": "./g-assist-plugin-flux.exe",
   "persistent": true,
   "functions": [
     {
-      "name": "set_random_color_wallpaper",
-      "description": "Sets a random color as the Windows desktop wallpaper",
+      "name": "test_function",
+      "description": "Test health endpoints on localhost:8000",
       "tags": [
-        "wallpaper",
-        "background",
-        "color",
-        "desktop"
-      ]
-    },
-    {
-      "name": "set_color_wallpaper",
-      "description": "Sets a specific color as the Windows desktop wallpaper",
-      "tags": [
-        "wallpaper",
-        "background",
-        "color",
-        "desktop"
+        "test",
+        "health",
+        "endpoints"
       ],
-      "properties": {
-        "color": {
-          "type": "string",
-          "description": "Hex color code (e.g., '#FF5733' or 'FF5733')"
-        }
-      }
+      "properties": {}
     },
     {
-      "name": "set_latest_screenshot_as_wallpaper",
-      "description": "Sets the latest screenshot as the Windows desktop wallpaper",
+      "name": "simple_test",
+      "description": "Simple test function",
       "tags": [
-        "wallpaper",
-        "background",
-        "screenshot",
-        "desktop"
-      ]
+        "test",
+        "simple"
+      ],
+      "properties": {}
     },
     {
-      "name": "generate_flux_image",
-      "description": "Generates an image using the Flux Dev NIM from NVIDIA",
+      "name": "check_nim_status",
+      "description": "Check the status of the flux NIM server",
+      "tags": [
+        "nim",
+        "status",
+        "flux"
+      ],
+      "properties": {}
+    },
+    {
+      "name": "stop_nim",
+      "description": "Stop the flux NIM server",
+      "tags": [
+        "nim",
+        "stop",
+        "flux"
+      ],
+      "properties": {}
+    },
+    {
+      "name": "start_nim",
+      "description": "Start the flux NIM server",
+      "tags": [
+        "nim",
+        "start",
+        "flux"
+      ],
+      "properties": {}
+    },
+    {
+      "name": "generate_image",
+      "description": "Generate an image using the Flux NIM API",
       "tags": [
         "image",
-        "generation",
-        "ai",
+        "generate",
         "flux",
-        "nvidia"
+        "ai"
       ],
       "properties": {
         "prompt": {
           "type": "string",
-          "description": "Text prompt describing the image to generate (optional)"
+          "description": "Text prompt describing the image to generate"
         }
       }
     }

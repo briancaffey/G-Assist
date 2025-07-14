@@ -22,33 +22,52 @@ manager. Communication between the plugin and the manager are done via pipes.
 import json
 import logging
 import os
-import random
-import tempfile
-import requests
+import time
+import urllib.request
+import urllib.error
+import subprocess
+import threading
 from ctypes import byref, windll, wintypes
 from typing import Optional
-from PIL import Image
 
 
-from typing import TypedDict
+# Data Types
+type Response = dict[str, any]
 
-class Response(TypedDict, total=False):
-    success: bool
-    message: Optional[str]
+LOG_FILE = os.path.join(os.environ.get("USERPROFILE", "."), 'python_plugin.log')
+logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
-
-LOG_FILE = os.path.join(os.environ.get("USERPROFILE", "."), 'flux_plugin.log')
-BASE_SCREENSHOT_DIRECTORY = os.path.join("E:\\", 'Videos', 'NVIDIA')
-CONFIG_FILE = os.path.join(
-    os.environ.get("PROGRAMDATA", "."),
-    r'NVIDIA Corporation\nvtopps\rise\plugins\flux',
-    'config.json'
-)
+# Global configuration variables
+CONFIG_FILE = os.path.join(f'{os.environ.get("PROGRAMDATA", ".")}{r'\NVIDIA Corporation\nvtopps\rise\plugins\flux'}', 'config.json')
 GAME_DIRECTORY = None
 NVIDIA_API_KEY = None
-OUTPUT_DIRECTORY = os.path.join(os.environ.get("USERPROFILE", "."), 'g-assist-plugin-flux')
+NGC_API_KEY = None
+HF_TOKEN = None
+LOCAL_NIM_CACHE = None
+OUTPUT_DIRECTORY = os.path.join(os.environ.get("USERPROFILE", "."), "flux_output")
+FLUX_URL = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev"
 
-logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+def load_config():
+    ''' Load configuration from config.json file '''
+    global GAME_DIRECTORY, NVIDIA_API_KEY, NGC_API_KEY, HF_TOKEN, LOCAL_NIM_CACHE, OUTPUT_DIRECTORY, FLUX_URL
+    try:
+        with open(CONFIG_FILE, 'r') as f:
+            config = json.load(f)
+            GAME_DIRECTORY = config.get('GAME_DIRECTORY', None)
+            NVIDIA_API_KEY = config.get('NVIDIA_API_KEY', None)
+            NGC_API_KEY = config.get('NGC_API_KEY', None)
+            HF_TOKEN = config.get('HF_TOKEN', None)
+            LOCAL_NIM_CACHE = config.get('LOCAL_NIM_CACHE', None)
+            OUTPUT_DIRECTORY = config.get('OUTPUT_DIRECTORY', OUTPUT_DIRECTORY)
+            FLUX_URL = config.get('FLUX_URL', "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev")
+            logging.info('Configuration loaded successfully')
+    except FileNotFoundError:
+        logging.warning(f'Config file not found: {CONFIG_FILE}')
+    except json.JSONDecodeError as e:
+        logging.error(f'Error parsing config file: {e}')
+    except Exception as e:
+        logging.error(f'Error loading config: {e}')
+
 
 def main():
     ''' Main entry point.
@@ -60,20 +79,8 @@ def main():
     Returns:
         0 if no errors occurred during execution; non-zero if an error occurred
     '''
-    # Add startup logging to help debug
-    try:
-        logging.info('=== Flux Plugin Starting ===')
-        logging.info(f'Log file location: {LOG_FILE}')
-        logging.info(f'Base screenshot directory: {BASE_SCREENSHOT_DIRECTORY}')
-        logging.info(f'Config file location: {CONFIG_FILE}')
-    except Exception as e:
-        # If logging fails, try to write to a simple file
-        try:
-            with open(os.path.join(os.environ.get("USERPROFILE", "."), 'flux_plugin_error.log'), 'a') as f:
-                f.write(f'{__import__("datetime").datetime.now()} - Failed to start logging: {str(e)}\n')
-        except:
-            pass
-        return 1
+    # Load configuration on startup
+    load_config()
 
     TOOL_CALLS_PROPERTY = 'tool_calls'
     CONTEXT_PROPERTY = 'messages'
@@ -90,15 +97,16 @@ def main():
     commands = {
         'initialize': execute_initialize_command,
         'shutdown': execute_shutdown_command,
-        'set_random_color_wallpaper': execute_set_random_color_wallpaper_command,
-        'set_color_wallpaper': execute_set_color_wallpaper_command,
-        'set_latest_screenshot_as_wallpaper': execute_set_latest_screenshot_as_wallpaper_command,
-        'generate_flux_image': execute_generate_flux_image_command,
+        'test_function': test_function,
+        'simple_test': simple_test,
+        'check_nim_status': check_nim_status,
+        'stop_nim': stop_nim,
+        'start_nim': start_nim,
+        'generate_image': generate_image
     }
     cmd = ''
 
-    logging.info('Flux Plugin started')
-    logging.info(f'Available commands: {list(commands.keys())}')
+    logging.info('Plugin started')
     while cmd != SHUTDOWN_COMMAND:
         response = None
         input = read_command()
@@ -107,7 +115,7 @@ def main():
             continue
 
         logging.info(f'Received input: {input}')
-        
+
         if TOOL_CALLS_PROPERTY in input:
             tool_calls = input[TOOL_CALLS_PROPERTY]
             for tool_call in tool_calls:
@@ -119,13 +127,11 @@ def main():
                             response = commands[cmd]()
                         else:
                             response = execute_initialize_command()
-                            # Get parameters from the tool_call, not from input root
-                            params = tool_call.get('params', {}) if 'params' in tool_call else {}
-                            context = input[CONTEXT_PROPERTY] if CONTEXT_PROPERTY in input else None
-                            system_info = input[SYSTEM_INFO_PROPERTY] if SYSTEM_INFO_PROPERTY in input else None
-                            
-                            logging.info(f'Calling {cmd} with params: {params}, context: {context}, system_info: {system_info}')
-                            response = commands[cmd](params, context, system_info)
+                            response = commands[cmd](
+                                tool_call.get('params', None),
+                                input[CONTEXT_PROPERTY] if CONTEXT_PROPERTY in input else None,
+                                input[SYSTEM_INFO_PROPERTY] if SYSTEM_INFO_PROPERTY in input else None  # Pass system_info directly
+                            )
                     else:
                         logging.warning(f'Unknown command: {cmd}')
                         response = generate_failure_response(f'{ERROR_MESSAGE} Unknown command: {cmd}')
@@ -143,7 +149,7 @@ def main():
             logging.info('Shutdown command received, terminating plugin')
             break
     
-    logging.info('Flux Plugin stopped.')
+    logging.info('G-Assist Plugin stopped.')
     return 0
 
 
@@ -182,7 +188,7 @@ def read_command() -> dict | None:
             if message_bytes.value < BUFFER_SIZE:
                 break
 
-        retval = ''.join(chunks)
+        retval = buffer.decode('utf-8')[:message_bytes.value]
         return json.loads(retval)
 
     except json.JSONDecodeError:
@@ -203,7 +209,7 @@ def write_response(response:Response) -> None:
         STD_OUTPUT_HANDLE = -11
         pipe = windll.kernel32.GetStdHandle(STD_OUTPUT_HANDLE)
 
-        json_message = json.dumps(response) + '<<END>>'
+        json_message = json.dumps(response) + "<<END>>"
         message_bytes = json_message.encode('utf-8')
         message_len = len(message_bytes)
 
@@ -212,7 +218,7 @@ def write_response(response:Response) -> None:
             pipe,
             message_bytes,
             message_len,
-            byref(bytes_written),
+            bytes_written,
             None
         )
 
@@ -251,123 +257,22 @@ def generate_success_response(message:str=None) -> Response:
     return response
 
 
-def find_latest_file(directory: str, extension: str) -> Optional[str]:
-    ''' Finds the latest file with the specified extension in the given directory.
-    
-    Args:
-        directory: Directory to search in
-        extension: File extension to look for (e.g., '.png', '.jpg')
-        
+def generate_progress_response(message:str=None, status:str="processing") -> Response:
+    ''' Generates a progress response for partial updates.
+
+    Parameters:
+        message: Progress message to display
+        status: Status indicator (processing, success, error)
+
     Returns:
-        Path to the latest file, or None if no files found
+        A progress response with the attached message and status
     '''
-    try:
-        files = [os.path.join(directory, f) for f in os.listdir(directory) if f.endswith(extension)]
-        if not files:
-            return None
-        return max(files, key=os.path.getmtime)
-    except Exception as e:
-        logging.error(f'Error finding latest file: {str(e)}')
-        return None
-
-
-def generate_random_hex_color() -> str:
-    ''' Generates a random hex color code.
-    
-    Returns:
-        A random hex color code (e.g., '#FF5733')
-    '''
-    return f"#{random.randint(0, 255):02X}{random.randint(0, 255):02X}{random.randint(0, 255):02X}"
-
-
-def hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
-    ''' Converts hex color to RGB tuple.
-    
-    Args:
-        hex_color: Hex color code (e.g., '#FF5733' or 'FF5733')
-        
-    Returns:
-        RGB tuple (r, g, b)
-    '''
-    # Remove '#' if present
-    hex_color = hex_color.lstrip('#')
-    
-    # Convert to RGB
-    r = int(hex_color[0:2], 16)
-    g = int(hex_color[2:4], 16)
-    b = int(hex_color[4:6], 16)
-    
-    return (r, g, b)
-
-
-def create_color_image(color: str, width: int = 1920, height: int = 1080) -> str:
-    ''' Creates a solid color image and saves it to a temporary file.
-    
-    Args:
-        color: Hex color code
-        width: Image width (default: 1920)
-        height: Image height (default: 1080)
-        
-    Returns:
-        Path to the created image file
-    '''
-    try:
-        # Convert hex to RGB
-        rgb_color = hex_to_rgb(color)
-        
-        # Create a new image with the specified color
-        image = Image.new('RGB', (width, height), rgb_color)
-        
-        # Save to temporary file
-        temp_dir = tempfile.gettempdir()
-        temp_file = os.path.join(temp_dir, f'flux_wallpaper_{color.lstrip("#")}.png')
-        
-        image.save(temp_file, 'PNG')
-        logging.info(f'Created color image: {temp_file}')
-        
-        return temp_file
-        
-    except Exception as e:
-        logging.error(f'Error creating color image: {str(e)}')
-        raise
-
-
-def set_windows_wallpaper(image_path: str) -> bool:
-    ''' Sets the Windows desktop wallpaper.
-    
-    Args:
-        image_path: Path to the image file
-        
-    Returns:
-        True if successful, False otherwise
-    '''
-    try:
-        # Convert path to absolute path
-        abs_path = os.path.abspath(image_path)
-        
-        # Use Windows API to set wallpaper
-        SPI_SETDESKWALLPAPER = 0x0014
-        SPIF_UPDATEINIFILE = 0x01
-        SPIF_SENDCHANGE = 0x02
-        
-        # Set the wallpaper
-        result = windll.user32.SystemParametersInfoW(
-            SPI_SETDESKWALLPAPER,
-            0,
-            abs_path,
-            SPIF_UPDATEINIFILE | SPIF_SENDCHANGE
-        )
-        
-        if result:
-            logging.info(f'Successfully set wallpaper to: {abs_path}')
-            return True
-        else:
-            logging.error('Failed to set wallpaper')
-            return False
-            
-    except Exception as e:
-        logging.error(f'Error setting wallpaper: {str(e)}')
-        return False
+    response = { 
+        'success': True,
+        'message': message,
+        'status': status
+    }
+    return response
 
 
 def execute_initialize_command() -> dict:
@@ -381,33 +286,9 @@ def execute_initialize_command() -> dict:
     Returns:
         The function return value(s)
     '''
-    global GAME_DIRECTORY, NVIDIA_API_KEY, OUTPUT_DIRECTORY
-    try:
-        with open(CONFIG_FILE, 'r') as f:
-            config = json.load(f)
-            GAME_DIRECTORY = config.get('GAME_DIRECTORY', None)
-            NVIDIA_API_KEY = config.get('NVIDIA_API_KEY', None)
-            OUTPUT_DIRECTORY = config.get('OUTPUT_DIRECTORY', OUTPUT_DIRECTORY)
-        logging.info('Config loaded successfully.')
-        logging.info(f'Game directory: {GAME_DIRECTORY}')
-        logging.info(f'Output directory: {OUTPUT_DIRECTORY}')
-        logging.info(f'NVIDIA API key configured: {"Yes" if NVIDIA_API_KEY else "No"}')
-        return generate_success_response('Flux plugin initialized successfully.')
-    except FileNotFoundError:
-        logging.error('Config file not found, creating sample config.')
-        # Create directory if it doesn't exist
-        config_dir = os.path.dirname(CONFIG_FILE)
-        os.makedirs(config_dir, exist_ok=True)
-        with open(CONFIG_FILE, 'w') as f:
-            json.dump({
-                "GAME_DIRECTORY": "GAME_DIRECTORY_HERE",
-                "NVIDIA_API_KEY": "YOUR_NVIDIA_API_KEY_HERE",
-                "OUTPUT_DIRECTORY": OUTPUT_DIRECTORY
-            }, f, indent=4)
-        return generate_failure_response('Config file not found. Sample config created.')
-    except Exception as e:
-        logging.error(f'Error loading config: {str(e)}')
-        return generate_failure_response('Failed to initialize.')
+    logging.info('Initializing plugin')
+    # initialization function body
+    return generate_success_response('initialize success.')
 
 
 def execute_shutdown_command() -> dict:
@@ -422,97 +303,15 @@ def execute_shutdown_command() -> dict:
     Returns:
         The function return value(s)
     '''
-    logging.info('Shutting down Flux plugin')
+    logging.info('Shutting down plugin')
     # shutdown function body
-    return generate_success_response('Flux plugin shutdown successfully.')
+    return generate_success_response('shutdown success.')
 
 
-def execute_set_random_color_wallpaper_command(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
-    ''' Command handler for `set_random_color_wallpaper` function
+def test_function(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
+    ''' Command handler for `test_function` function
 
-    Sets a random color as the Windows desktop wallpaper.
-
-    Args:
-        params: Function parameters
-        context: Context information
-        system_info: System information
-
-    Returns:
-        The function return value(s)
-    '''
-    logging.info('Executing set_random_color_wallpaper')
-    
-    try:
-        # Generate a random color
-        random_color = generate_random_hex_color()
-        logging.info(f'Generated random color: {random_color}')
-        
-        # Create an image with the random color
-        image_path = create_color_image(random_color)
-        
-        # Set the wallpaper
-        success = set_windows_wallpaper(image_path)
-        
-        if success:
-            return generate_success_response(f'Successfully set wallpaper to random color: {random_color}')
-        else:
-            return generate_failure_response('Failed to set wallpaper')
-            
-    except Exception as e:
-        logging.error(f'Error in set_random_color_wallpaper: {str(e)}')
-        return generate_failure_response(f'Error setting random color wallpaper: {str(e)}')
-
-
-def execute_set_color_wallpaper_command(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
-    ''' Command handler for `set_color_wallpaper` function
-
-    Sets a specific color as the Windows desktop wallpaper.
-
-    Args:
-        params: Function parameters containing the color
-        context: Context information
-        system_info: System information
-
-    Returns:
-        The function return value(s)
-    '''
-    logging.info(f'Executing set_color_wallpaper with params: {params}')
-    
-    try:
-        # Get color from parameters
-        if not params or 'color' not in params:
-            return generate_failure_response('No color specified. Please provide a hex color code.')
-        
-        color = params['color']
-        
-        # Validate color format
-        if not color.startswith('#') and len(color) == 6:
-            color = '#' + color
-        elif not color.startswith('#') or len(color) != 7:
-            return generate_failure_response('Invalid color format. Please use hex format (e.g., "#FF5733" or "FF5733")')
-        
-        logging.info(f'Setting wallpaper to color: {color}')
-        
-        # Create an image with the specified color
-        image_path = create_color_image(color)
-        
-        # Set the wallpaper
-        success = set_windows_wallpaper(image_path)
-        
-        if success:
-            return generate_success_response(f'Successfully set wallpaper to color: {color}')
-        else:
-            return generate_failure_response('Failed to set wallpaper')
-            
-    except Exception as e:
-        logging.error(f'Error in set_color_wallpaper: {str(e)}')
-        return generate_failure_response(f'Error setting color wallpaper: {str(e)}')
-
-
-def execute_set_latest_screenshot_as_wallpaper_command(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
-    ''' Command handler for `set_latest_screenshot_as_wallpaper` function
-
-    Sets the latest screenshot as the Windows desktop wallpaper.
+    Tests health endpoints on localhost:8000.
 
     Args:
         params: Function parameters
@@ -522,64 +321,321 @@ def execute_set_latest_screenshot_as_wallpaper_command(params:dict=None, context
     Returns:
         The function return value(s)
     '''
-    logging.info('Executing set_latest_screenshot_as_wallpaper')
-    
+    logging.info(f'Executing test_function with params: {params}')
+
     try:
-        # Determine screenshot directory - use game-specific directory if available
-        global GAME_DIRECTORY
-        if GAME_DIRECTORY:
-            screenshot_directory = os.path.join(BASE_SCREENSHOT_DIRECTORY, GAME_DIRECTORY)
-        else:
-            screenshot_directory = BASE_SCREENSHOT_DIRECTORY
-        
-        logging.info(f'Searching for screenshots in: {screenshot_directory}')
-        
-        # Find the latest screenshot file
-        file_path = find_latest_file(screenshot_directory, '.png')
-        
-        if not file_path:
-            # Try other image formats if PNG not found
-            for ext in ['.jpg', '.jpeg']:
-                file_path = find_latest_file(screenshot_directory, ext)
-                if file_path:
-                    break
-        
-        if not file_path:
-            return generate_failure_response('No screenshot found.')
-        
-        logging.info(f'Found latest screenshot: {file_path}')
-        
-        # Set the wallpaper
-        success = set_windows_wallpaper(file_path)
-        
-        if success:
-            filename = os.path.basename(file_path)
-            return generate_success_response(f'Successfully set wallpaper to latest screenshot: {filename}')
-        else:
-            return generate_failure_response('Failed to set wallpaper')
-            
+        # Step 1: Test live endpoint
+        logging.info('Testing /v1/health/live endpoint...')
+        live_url = 'http://localhost:8000/v1/health/live'
+
+        try:
+            with urllib.request.urlopen(live_url, timeout=5) as response:
+                live_status = response.getcode()
+                logging.info(f'Live endpoint status: {live_status}')
+                if live_status != 200:
+                    return generate_failure_response(f'Live endpoint returned status {live_status}')
+        except urllib.error.URLError as e:
+            logging.error(f'Error accessing live endpoint: {e}')
+            return generate_failure_response(f'Live endpoint error: {e}')
+        except Exception as e:
+            logging.error(f'Unexpected error with live endpoint: {e}')
+            return generate_failure_response(f'Live endpoint error: {e}')
+
+        # Step 2: Test ready endpoint
+        logging.info('Testing /v1/health/ready endpoint...')
+        ready_url = 'http://localhost:8000/v1/health/ready'
+
+        try:
+            with urllib.request.urlopen(ready_url, timeout=5) as response:
+                ready_status = response.getcode()
+                logging.info(f'Ready endpoint status: {ready_status}')
+                if ready_status != 200:
+                    return generate_failure_response(f'Ready endpoint returned status {ready_status}')
+        except urllib.error.URLError as e:
+            logging.error(f'Error accessing ready endpoint: {e}')
+            return generate_failure_response(f'Ready endpoint error: {e}')
+        except Exception as e:
+            logging.error(f'Unexpected error with ready endpoint: {e}')
+            return generate_failure_response(f'Ready endpoint error: {e}')
+
+        # Step 3: Success response
+        logging.info('Both health endpoints are working!')
+        final_response = generate_success_response('Service is live and ready!')
+        logging.info(f'Final response: {final_response}')
+        return final_response
+
     except Exception as e:
-        logging.error(f'Error in set_latest_screenshot_as_wallpaper: {str(e)}')
-        return generate_failure_response(f'Error setting latest screenshot as wallpaper: {str(e)}')
+        logging.error(f'Error in test_function: {str(e)}')
+        return generate_failure_response(f'Error in test_function: {str(e)}')
 
 
-def execute_generate_flux_image_command(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
-    ''' Command handler for `generate_flux_image` function
+def simple_test(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
+    ''' Command handler for `simple_test` function
 
-    Generates an image using the Flux Dev NIM from NVIDIA.
+    Simple test function that doesn't use RISE API.
 
     Args:
-        params: Function parameters (optional prompt)
+        params: Function parameters
         context: Context information
         system_info: System information
 
     Returns:
         The function return value(s)
     '''
-    logging.info('Executing generate_flux_image')
+    logging.info(f'Executing simple_test with params: {params}')
+
+    try:
+        logging.info('Simple test function executed successfully')
+        return generate_success_response('Simple test function works!')
+
+    except Exception as e:
+        logging.error(f'Error in simple_test: {str(e)}')
+        return generate_failure_response(f'Error in simple_test: {str(e)}')
+
+
+def check_nim_status(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
+    ''' Command handler for `check_nim_status` function
+
+    Checks the status of the flux NIM server using WSL and podman.
+
+    Args:
+        params: Function parameters
+        context: Context information
+        system_info: System information
+
+    Returns:
+        The function return value(s)
+    '''
+    logging.info(f'Executing check_nim_status with params: {params}')
+
+    try:
+        # Check if nim-server container is running using WSL and podman
+        logging.info('Checking if nim-server container is running...')
+        check_cmd = ['wsl', '-d', 'NVIDIA-Workbench', 'podman', 'ps', '--filter', 'name=nim-server', '--format', '{{.Names}}']
+
+        try:
+            result = subprocess.run(check_cmd, check=True, capture_output=True, text=True)
+            container_names = result.stdout.strip()
+            logging.info(f'Nim-server container names: {container_names}')
+
+            if container_names:
+                return generate_success_response(f'NIM server is running. Container: {container_names}')
+            else:
+                return generate_failure_response('NIM server is not running.')
+
+        except subprocess.CalledProcessError as e:
+            logging.error(f'Error checking NIM server status: {e}')
+            return generate_failure_response(f'Error checking NIM server status: {e}')
+        except FileNotFoundError:
+            logging.error('WSL or podman command not found')
+            return generate_failure_response('WSL or podman command not found')
+        except Exception as e:
+            logging.error(f'Unexpected error checking NIM server status: {e}')
+            return generate_failure_response(f'Error checking NIM server status: {e}')
+
+    except Exception as e:
+        logging.error(f'Error in check_nim_status: {str(e)}')
+        return generate_failure_response(f'Error in check_nim_status: {str(e)}')
+
+
+def stop_nim(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
+    ''' Command handler for `stop_nim` function
+
+    Stops the flux NIM server using WSL and podman.
+
+    Args:
+        params: Function parameters
+        context: Context information
+        system_info: System information
+
+    Returns:
+        The function return value(s)
+    '''
+    logging.info(f'Executing stop_nim with params: {params}')
+
+    try:
+        # Stop the nim-server container using WSL and podman
+        logging.info('Stopping nim-server container...')
+        stop_cmd = ['wsl', '-d', 'NVIDIA-Workbench', 'podman', 'stop', 'nim-server']
+
+        try:
+            result = subprocess.run(stop_cmd, check=True, capture_output=True, text=True)
+            logging.info(f'Nim-server stop result: {result.stdout.strip()}')
+
+            return generate_success_response('NIM server stopped successfully.')
+
+        except subprocess.CalledProcessError as e:
+            logging.error(f'Error stopping NIM server: {e}')
+            return generate_failure_response(f'Error stopping NIM server: {e}')
+        except FileNotFoundError:
+            logging.error('WSL or podman command not found')
+            return generate_failure_response('WSL or podman command not found')
+        except Exception as e:
+            logging.error(f'Unexpected error stopping NIM server: {e}')
+            return generate_failure_response(f'Error stopping NIM server: {e}')
+        
+    except Exception as e:
+        logging.error(f'Error in stop_nim: {str(e)}')
+        return generate_failure_response(f'Error in stop_nim: {str(e)}')
+
+
+def start_nim(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
+    ''' Command handler for `start_nim` function
+
+    Starts the flux NIM server using WSL and podman with configuration from config.json.
+
+    Args:
+        params: Function parameters
+        context: Context information
+        system_info: System information
+
+    Returns:
+        The function return value(s)
+    '''
+    logging.info(f'Executing start_nim with params: {params}')
     
     try:
-        # Check if API key is configured
+        # Reload configuration to ensure we have the latest values
+        load_config()
+        
+        # Check configuration requirements
+        global NGC_API_KEY, HF_TOKEN, LOCAL_NIM_CACHE
+        if not NGC_API_KEY or NGC_API_KEY == "YOUR_NGC_API_KEY_HERE":
+            return generate_failure_response('NGC API key not configured. Please set NGC_API_KEY in config.json')
+        
+        if not HF_TOKEN or HF_TOKEN == "YOUR_HF_TOKEN_HERE":
+            return generate_failure_response('HF Token not configured. Please set HF_TOKEN in config.json')
+        
+        if not LOCAL_NIM_CACHE or LOCAL_NIM_CACHE == "/path/to/your/nim/cache":
+            return generate_failure_response('Local NIM cache path not configured. Please set LOCAL_NIM_CACHE in config.json')
+        
+        # Check if NIM server is already running
+        logging.info('Checking if Flux NIM server is already running...')
+        check_result = check_nim_status()
+        if check_result.get('success', False):
+            return generate_failure_response('Flux NIM server is already running.')
+        
+        # Build the podman command
+        logging.info('Starting Flux NIM server...')
+        podman_cmd = [
+            'wsl', '-d', 'NVIDIA-Workbench',
+            'podman', 'run', '-d', '--rm', '--name=nim-server',
+            '--device', 'nvidia.com/gpu=all',
+            '-e', f'NGC_API_KEY={NGC_API_KEY}',
+            '-e', f'HF_TOKEN={HF_TOKEN}',
+            '-p', '8000:8000',
+            '-v', f'{LOCAL_NIM_CACHE}:/opt/nim/.cache/',
+            'nvcr.io/nim/black-forest-labs/flux.1-dev:1.0.0'
+        ]
+        
+        try:
+            # Start the container in the background
+            result = subprocess.run(podman_cmd, check=True, capture_output=True, text=True)
+            logging.info(f'NIM server start result: {result.stdout.strip()}')
+            
+            return generate_success_response('NIM server started successfully.')
+                
+        except subprocess.CalledProcessError as e:
+            logging.error(f'Error starting NIM server: {e}')
+            return generate_failure_response(f'Error starting NIM server: {e}')
+        except FileNotFoundError:
+            logging.error('WSL or podman command not found')
+            return generate_failure_response('WSL or podman command not found')
+        except Exception as e:
+            logging.error(f'Unexpected error starting NIM server: {e}')
+            return generate_failure_response(f'Error starting NIM server: {e}')
+        
+    except Exception as e:
+        logging.error(f'Error in start_nim: {str(e)}')
+        return generate_failure_response(f'Error in start_nim: {str(e)}')
+
+
+def generate_image_worker(prompt: str, output_dir: str, flux_url: str, nvidia_api_key: str):
+    ''' Background worker function to generate image '''
+    try:
+        logging.info(f'Starting background image generation for prompt: {prompt}')
+        
+        payload = {
+            "height": 768,
+            "width": 1344,
+            "cfg_scale": 5,
+            "mode": "base",
+            "samples": 1,
+            "seed": 0,
+            "steps": 50,
+            "prompt": prompt
+        }
+        
+        headers = {
+            "accept": "application/json",
+            "content-type": "application/json",
+            "Authorization": f"Bearer {nvidia_api_key}"
+        }
+        
+        logging.info(f'Sending request to Flux API: {flux_url}')
+        logging.info(f'Payload: {payload}')
+        
+        # Convert payload to JSON
+        json_payload = json.dumps(payload)
+        
+        # Create request
+        req = urllib.request.Request(flux_url, data=json_payload.encode('utf-8'), headers=headers, method='POST')
+        
+        # Send request
+        with urllib.request.urlopen(req, timeout=300) as response:  # Increased timeout to 5 minutes
+            response_data = json.loads(response.read().decode('utf-8'))
+            logging.info(f'Flux API response received.')
+            
+            if 'artifacts' in response_data and len(response_data['artifacts']) > 0:
+                artifact = response_data['artifacts'][0]
+                image_data = artifact['base64']
+
+                import datetime
+                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+                filename = f"flux_image_{timestamp}.png"
+                file_path = os.path.join(output_dir, filename)
+
+                # Save the image
+                import base64
+                image_bytes = base64.b64decode(image_data)
+                
+                with open(file_path, 'wb') as f:
+                    f.write(image_bytes)
+                
+                logging.info(f'Image saved successfully: {file_path}')
+            else:
+                logging.error('No artifacts found in response')
+                
+    except urllib.error.URLError as e:
+        logging.error(f'Error making request to Flux API: {e}')
+    except urllib.error.HTTPError as e:
+        logging.error(f'HTTP error from Flux API: {e}')
+    except json.JSONDecodeError as e:
+        logging.error(f'Error parsing API response: {e}')
+    except Exception as e:
+        logging.error(f'Unexpected error during image generation: {e}')
+
+
+def generate_image(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
+    ''' Command handler for `generate_image` function
+
+    Generates an image using the Flux NIM API in a background thread.
+
+    Args:
+        params: Function parameters (can include 'prompt')
+        context: Context information
+        system_info: System information
+
+    Returns:
+        The function return value(s)
+    '''
+    logging.info(f'Executing generate_image with params: {params}')
+    
+    try:
+        # Reload configuration to ensure we have the latest values
+        load_config()
+        
+        # Check if NVIDIA API key is configured
         global NVIDIA_API_KEY
         if not NVIDIA_API_KEY or NVIDIA_API_KEY == "YOUR_NVIDIA_API_KEY_HERE":
             return generate_failure_response('NVIDIA API key not configured. Please set NVIDIA_API_KEY in config.json')
@@ -597,77 +653,22 @@ def execute_generate_flux_image_command(params:dict=None, context:dict=None, sys
         os.makedirs(OUTPUT_DIRECTORY, exist_ok=True)
         logging.info(f'Output directory: {OUTPUT_DIRECTORY}')
         
-        # Prepare the API request
-        url = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev"
+        global FLUX_URL
         
-        payload = {
-            "height": 768,
-            "width": 1344,
-            "cfg_scale": 5,
-            "mode": "base",
-            "samples": 1,
-            "seed": 0,
-            "steps": 50,
-            "prompt": prompt
-        }
+        # Start image generation in background thread
+        thread = threading.Thread(
+            target=generate_image_worker,
+            args=(prompt, OUTPUT_DIRECTORY, FLUX_URL, NVIDIA_API_KEY),
+            daemon=True
+        )
+        thread.start()
         
-        headers = {
-            "accept": "application/json",
-            "content-type": "application/json",
-            "Authorization": f"Bearer {NVIDIA_API_KEY}"
-        }
+        logging.info(f'Started background image generation thread for prompt: {prompt}')
+        return generate_success_response(f'Your image generation request is in progress! Prompt: "{prompt}"')
         
-        logging.info('Sending request to Flux NIM API...')
-        logging.info(f'URL: {url}')
-        logging.info(f'Payload: {payload}')
-        
-        # Make the API request
-        response = requests.post(url, json=payload, headers=headers, timeout=120)
-        
-        logging.info(f'Response status code: {response.status_code}')
-        
-        if response.status_code == 200:
-            # Parse the response
-            response_data = response.json()
-            logging.info('Successfully received response from Flux NIM API')
-            
-            # Extract the image data from artifacts array
-            if 'artifacts' in response_data and len(response_data['artifacts']) > 0:
-                artifact = response_data['artifacts'][0]
-                image_data = artifact['base64']
-                
-                # Generate filename with timestamp
-                import datetime
-                timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-                filename = f"flux_image_{timestamp}.png"
-                file_path = os.path.join(OUTPUT_DIRECTORY, filename)
-                
-                # Save the image
-                import base64
-                image_bytes = base64.b64decode(image_data)
-                
-                with open(file_path, 'wb') as f:
-                    f.write(image_bytes)
-                
-                logging.info(f'Image saved successfully: {file_path}')
-                
-                return generate_success_response(f'Successfully generated Flux image: {filename}')
-            else:
-                logging.error('No artifacts found in API response')
-                return generate_failure_response('No artifacts found in API response')
-        else:
-            logging.error(f'API request failed with status {response.status_code}: {response.text}')
-            return generate_failure_response(f'API request failed: {response.status_code} - {response.text}')
-            
-    except requests.exceptions.Timeout:
-        logging.error('API request timed out')
-        return generate_failure_response('API request timed out')
-    except requests.exceptions.RequestException as e:
-        logging.error(f'Network error: {str(e)}')
-        return generate_failure_response(f'Network error: {str(e)}')
     except Exception as e:
-        logging.error(f'Error in generate_flux_image: {str(e)}')
-        return generate_failure_response(f'Error generating Flux image: {str(e)}')
+        logging.error(f'Error in generate_image: {str(e)}')
+        return generate_failure_response(f'Error in generate_image: {str(e)}')
 
 
 if __name__ == '__main__':
