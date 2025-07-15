@@ -27,6 +27,8 @@ import urllib.request
 import urllib.error
 import subprocess
 import threading
+import requests
+import mimetypes
 from ctypes import byref, windll, wintypes
 from typing import Optional
 
@@ -46,10 +48,12 @@ HF_TOKEN = None
 LOCAL_NIM_CACHE = None
 OUTPUT_DIRECTORY = os.path.join(os.environ.get("USERPROFILE", "."), "flux_output")
 FLUX_URL = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev"
+INVOKEAI_URL = "http://localhost:9090"
+BOARD_ID = None
 
 def load_config():
     ''' Load configuration from config.json file '''
-    global GAME_DIRECTORY, NVIDIA_API_KEY, NGC_API_KEY, HF_TOKEN, LOCAL_NIM_CACHE, OUTPUT_DIRECTORY, FLUX_URL
+    global GAME_DIRECTORY, NVIDIA_API_KEY, NGC_API_KEY, HF_TOKEN, LOCAL_NIM_CACHE, OUTPUT_DIRECTORY, FLUX_URL, INVOKEAI_URL, BOARD_ID
     try:
         with open(CONFIG_FILE, 'r') as f:
             config = json.load(f)
@@ -60,6 +64,8 @@ def load_config():
             LOCAL_NIM_CACHE = config.get('LOCAL_NIM_CACHE', None)
             OUTPUT_DIRECTORY = config.get('OUTPUT_DIRECTORY', OUTPUT_DIRECTORY)
             FLUX_URL = config.get('FLUX_URL', "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev")
+            INVOKEAI_URL = config.get('INVOKEAI_URL', "http://localhost:9090")
+            BOARD_ID = config.get('BOARD_ID', None)
             logging.info('Configuration loaded successfully')
     except FileNotFoundError:
         logging.warning(f'Config file not found: {CONFIG_FILE}')
@@ -102,7 +108,8 @@ def main():
         'check_nim_status': check_nim_status,
         'stop_nim': stop_nim,
         'start_nim': start_nim,
-        'generate_image': generate_image
+        'generate_image': generate_image,
+        'generate_image_using_kontext': generate_image_using_kontext
     }
     cmd = ''
 
@@ -669,6 +676,496 @@ def generate_image(params:dict=None, context:dict=None, system_info:dict=None) -
     except Exception as e:
         logging.error(f'Error in generate_image: {str(e)}')
         return generate_failure_response(f'Error in generate_image: {str(e)}')
+
+
+def find_most_recent_image(directory: str, extensions: set[str]):
+    """
+    Recursively search for the most recent image file in a directory.
+
+    Args:
+        directory (str): Root directory to search in.
+        extensions (set[str]): Set of allowed image file extensions (e.g., {'.png', '.jpg'}).
+
+    Returns:
+        Optional[str]: Path to the most recently modified image file, or None if not found.
+    """
+    from pathlib import Path
+    
+    dir_path = Path(directory)
+    if not dir_path.exists() or not dir_path.is_dir():
+        logging.warning(f"Directory does not exist or is not a directory: {directory}")
+        return None
+
+    latest_file = None
+    latest_mtime = 0
+
+    try:
+        for file_path in dir_path.rglob("*"):
+            if file_path.is_file() and file_path.suffix.lower() in extensions:
+                mtime = file_path.stat().st_mtime
+                if mtime > latest_mtime:
+                    latest_file = str(file_path)
+                    latest_mtime = mtime
+    except Exception as e:
+        logging.error(f"Error while scanning directory {directory}: {e}")
+        return None
+
+    return latest_file
+
+
+def upload_image_to_invoke(image_path: str, invokeai_url: str, board_id: str = None):
+    """
+    Uploads an image to InvokeAI and returns the image name.
+
+    Args:
+        image_path (str): Path to the image file
+        invokeai_url (str): Base URL for InvokeAI
+        board_id (str): ID of the board to upload to (optional)
+
+    Returns:
+        str: The image name returned by InvokeAI, or None if upload failed
+    """
+    upload_url = f"{invokeai_url}/api/v1/images/upload"
+    params = {
+        "image_category": "user",
+        "is_intermediate": "false",
+        "crop_visible": "false"
+    }
+    
+    # Add board_id to params if provided
+    if board_id:
+        params["board_id"] = board_id
+
+    try:
+        # Get the MIME type of the image
+        mime_type, _ = mimetypes.guess_type(image_path)
+        if mime_type is None:
+            mime_type = 'image/png'  # Default to PNG if guess fails
+
+        # Prepare the file for upload
+        with open(image_path, 'rb') as f:
+            files = {
+                'file': (os.path.basename(image_path), f, mime_type),
+                # 'resize_to': (None, '(1360,768)')
+            }
+
+            # Make the request
+            response = requests.post(
+                upload_url,
+                params=params,
+                files=files,
+                headers={'accept': 'application/json'}
+            )
+
+            response.raise_for_status()
+            result = response.json()
+            return result.get('image_name')
+
+    except Exception as e:
+        logging.error(f"Error uploading image to InvokeAI: {e}")
+        return None
+
+
+# This dictionary defines the workflow that will be sent to InvokeAI for doing Flux Kontext generation
+INVOKEAI_FLUX_KONTEXT_WORKFLOW = {
+  "queue_id": "default",
+  "enqueued": 0,
+  "requested": 0,
+  "batch": {
+    "data": [],
+    "graph": {
+        "id": "ec50dc0e-363b-4723-bf89-264cf52a4af1",
+        "nodes": {
+            "flux_model_loader:ywdpEhgSIn": {
+                "id": "flux_model_loader:ywdpEhgSIn",
+                "is_intermediate": True,
+                "use_cache": True,
+                "model": {
+                    "key" : "c5ba7675-db0c-4280-a426-0154b5de8c98",
+                    "hash": "blake3:8aadbed066021cc98686965fe9fc580083acbe027f600190f8d2436e6ac8b366",
+                    "name": "FLUX.1 Kontext dev (Quantized)",
+                    "base": "flux",
+                    "type": "main"
+                },
+                "t5_encoder_model": {
+                    "key" : "284404cd-baf2-42cc-bbb3-a430d8909df6",
+                    "hash": "blake3:12f3f5d4856e684c627c0b5c403ace83a8e8baaf0fa6518cd230b5ec1c519107",
+                    "name": "t5_base_encoder",
+                    "base": "any",
+                    "type": "t5_encoder"
+                },
+                "clip_embed_model": {
+                    "key" : "f4269feb-2e98-4174-9c22-74dca9140584",
+                    "hash": "blake3:17c19f0ef941c3b7609a9c94a659ca5364de0be364a91d4179f0e39ba17c3b70",
+                    "name": "clip-vit-large-patch14",
+                    "base": "any",
+                    "type": "clip_embed"
+                },
+                "vae_model": {
+                    "key" : "0f0ccb31-5bd9-4a29-b2a4-56168596f4d6",
+                    "hash": "blake3:ce21cb76364aa6e2421311cf4a4b5eb052a76c4f1cd207b50703d8978198a068",
+                    "name": "FLUX.1-schnell_ae",
+                    "base": "flux",
+                    "type": "vae"
+                },
+                "type": "flux_model_loader"
+            },
+            "positive_prompt:0oQdkhpu9K": {
+                "id": "positive_prompt:0oQdkhpu9K",
+                "is_intermediate": True,
+                "use_cache": True,
+                "value": "make it in the style of studio ghibli anime",
+                "type": "string"
+            },
+            "flux_text_encoder:o0tHGDGa69": {
+                "id": "flux_text_encoder:o0tHGDGa69",
+                "is_intermediate": True,
+                "use_cache": True,
+                "type": "flux_text_encoder"
+            },
+            "pos_cond_collect:ApPpdRqgK2": {
+                "id": "pos_cond_collect:ApPpdRqgK2",
+                "is_intermediate": True,
+                "use_cache": True,
+                "collection": [],
+                "type": "collect"
+            },
+            "seed:aVE0l2Zlf1": {
+                "id": "seed:aVE0l2Zlf1",
+                "is_intermediate": True,
+                "use_cache": True,
+                "value": 1234,
+                "type": "integer"
+            },
+            "flux_denoise:9SHZg1d4kC": {
+                "id": "flux_denoise:9SHZg1d4kC",
+                "is_intermediate": True,
+                "use_cache": True,
+                "denoising_start": 0,
+                "denoising_end": 1,
+                "add_noise": True,
+                "cfg_scale": 1,
+                "cfg_scale_start_step": 0,
+                "cfg_scale_end_step": -1,
+                "width": 1376,
+                "height": 784,
+                "num_steps": 50,
+                "guidance": 9,
+                "seed": 0,
+                "type": "flux_denoise"
+            },
+            "flux_vae_decode:Vr4fbsSEgU": {
+                "id": "flux_vae_decode:Vr4fbsSEgU",
+                "is_intermediate": True,
+                "use_cache": True,
+                "type": "flux_vae_decode"
+            },
+            "core_metadata:oCIejDlaQA": {
+                "id": "core_metadata:oCIejDlaQA",
+                "is_intermediate": True,
+                "use_cache": True,
+                "generation_mode": "flux_txt2img",
+                "width": 1360,
+                "height": 768,
+                "steps": 50,
+                "model": {
+                    "key" : "c5ba7675-db0c-4280-a426-0154b5de8c98",
+                    "hash": "blake3:8aadbed066021cc98686965fe9fc580083acbe027f600190f8d2436e6ac8b366",
+                    "name": "FLUX.1 Kontext dev (Quantized)",
+                    "base": "flux",
+                    "type": "main"
+                },
+                "vae": {
+                    "key" : "0f0ccb31-5bd9-4a29-b2a4-56168596f4d6",
+                    "hash": "blake3:ce21cb76364aa6e2421311cf4a4b5eb052a76c4f1cd207b50703d8978198a068",
+                    "name": "FLUX.1-schnell_ae",
+                    "base": "flux",
+                    "type": "vae"
+                },
+                "type": "core_metadata"
+            },
+            "flux_kontext:MsQ9ynwazR": {
+                "id": "flux_kontext:MsQ9ynwazR",
+                "is_intermediate": True,
+                "use_cache": True,
+                "image": {"image_name": "PLACEHOLDER.png"}, # this will be replaced with the actual image name
+                "type": "flux_kontext"
+            },
+            "canvas_output:FhpncF2ITc": {
+                "id": "canvas_output:FhpncF2ITc",
+                "is_intermediate": False,
+                "use_cache": False,
+                "width": 1360,
+                "height": 768,
+                "resample_mode": "bicubic",
+                "type": "img_resize"
+            }
+        },
+        "edges": [
+            {
+                "source"     : {"node_id": "flux_model_loader:ywdpEhgSIn", "field": "transformer"},
+                "destination": {"node_id": "flux_denoise:9SHZg1d4kC",      "field": "transformer"}
+            },
+            {
+                "source"     : {"node_id": "flux_model_loader:ywdpEhgSIn", "field": "vae"           },
+                "destination": {"node_id": "flux_denoise:9SHZg1d4kC",      "field": "controlnet_vae"}
+            },
+            {
+                "source"     : {"node_id": "flux_model_loader:ywdpEhgSIn", "field": "vae"},
+                "destination": {"node_id": "flux_vae_decode:Vr4fbsSEgU",   "field": "vae"}
+            },
+            {
+                "source"     : {"node_id": "flux_model_loader:ywdpEhgSIn", "field": "clip"},
+                "destination": {"node_id": "flux_text_encoder:o0tHGDGa69", "field": "clip"}
+            },
+            {
+                "source"     : {"node_id": "flux_model_loader:ywdpEhgSIn", "field": "t5_encoder"},
+                "destination": {"node_id": "flux_text_encoder:o0tHGDGa69", "field": "t5_encoder"}
+            },
+            {
+                "source"     : {"node_id": "flux_model_loader:ywdpEhgSIn", "field": "max_seq_len"   },
+                "destination": {"node_id": "flux_text_encoder:o0tHGDGa69", "field": "t5_max_seq_len"}
+            },
+            {
+                "source"     : {"node_id": "positive_prompt:0oQdkhpu9K",   "field": "value" },
+                "destination": {"node_id": "flux_text_encoder:o0tHGDGa69", "field": "prompt"}
+            },
+            {
+                "source"     : {"node_id": "flux_text_encoder:o0tHGDGa69", "field": "conditioning"},
+                "destination": {"node_id": "pos_cond_collect:ApPpdRqgK2",  "field": "item"        }
+            },
+            {
+                "source"     : {"node_id": "pos_cond_collect:ApPpdRqgK2", "field": "collection"                },
+                "destination": {"node_id": "flux_denoise:9SHZg1d4kC",     "field": "positive_text_conditioning"}
+            },
+            {
+                "source"     : {"node_id": "seed:aVE0l2Zlf1",         "field": "value"},
+                "destination": {"node_id": "flux_denoise:9SHZg1d4kC", "field": "seed" }
+            },
+            {
+                "source"     : {"node_id": "flux_denoise:9SHZg1d4kC",    "field": "latents"},
+                "destination": {"node_id": "flux_vae_decode:Vr4fbsSEgU", "field": "latents"}
+            },
+            {
+                "source"     : {"node_id": "seed:aVE0l2Zlf1",          "field": "value"},
+                "destination": {"node_id": "core_metadata:oCIejDlaQA", "field": "seed" }
+            },
+            {
+                "source"     : {"node_id": "positive_prompt:0oQdkhpu9K", "field": "value"          },
+                "destination": {"node_id": "core_metadata:oCIejDlaQA",   "field": "positive_prompt"}
+            },
+            {
+                "source"     : {"node_id": "flux_kontext:MsQ9ynwazR", "field": "kontext_cond"        },
+                "destination": {"node_id": "flux_denoise:9SHZg1d4kC", "field": "kontext_conditioning"}
+            },
+            {
+                "source"     : {"node_id": "flux_vae_decode:Vr4fbsSEgU", "field": "image"},
+                "destination": {"node_id": "canvas_output:FhpncF2ITc",   "field": "image"}
+            },
+            {
+                "source"     : {"node_id": "core_metadata:oCIejDlaQA", "field": "metadata"},
+                "destination": {"node_id": "canvas_output:FhpncF2ITc", "field": "metadata"}
+            }
+        ]
+    },
+    "runs": 1
+  },
+  "priority": 0
+}
+
+
+def modify_workflow_for_kontext(workflow_data, prompt, image_name):
+    """
+    Modifies the workflow data with the provided prompt and image name.
+    
+    Args:
+        workflow_data (dict): The workflow dictionary to modify
+        prompt (str): The prompt to use for generation
+        image_name (str): The name of the uploaded image
+        
+    Returns:
+        dict: The modified workflow data
+    """
+    try:
+        # Create a deep copy of the workflow to avoid modifying the original
+        import copy
+        modified_workflow = copy.deepcopy(workflow_data)
+        
+        # Update the prompt node
+        prompt_node_id = "positive_prompt:0oQdkhpu9K"
+        modified_workflow['batch']['graph']['nodes'][prompt_node_id]['value'] = prompt
+        logging.info(f"Updated prompt to: {prompt}")
+        
+        # Update the kontext node with the uploaded image
+        kontext_node_id = "flux_kontext:MsQ9ynwazR"
+        modified_workflow['batch']['graph']['nodes'][kontext_node_id]['image']['image_name'] = image_name
+        logging.info(f"Updated kontext image to: {image_name}")
+        
+        return modified_workflow
+        
+    except Exception as e:
+        logging.error(f"Error modifying workflow: {e}")
+        return None
+
+
+def submit_workflow_to_invokeai(workflow_data, invokeai_url):
+    """
+    Submits the modified workflow data to the InvokeAI API endpoint.
+    
+    Args:
+        workflow_data (dict): The workflow data to submit
+        invokeai_url (str): The base URL for InvokeAI
+        
+    Returns:
+        bool: True on success, False on failure
+    """
+    api_endpoint = f"{invokeai_url}/api/v1/queue/default/enqueue_batch"
+    headers = {'Content-Type': 'application/json', 'Accept': 'application/json'}
+    
+    logging.info(f"Submitting workflow to InvokeAI API at {api_endpoint}...")
+    
+    try:
+        response = requests.post(
+            api_endpoint,
+            json=workflow_data,
+            headers=headers,
+            timeout=60
+        )
+        
+        # Check for HTTP errors
+        response.raise_for_status()
+        
+        logging.info("Workflow submitted successfully to the queue!")
+        logging.info(f"API Response Status Code: {response.status_code}")
+        
+        try:
+            response_json = response.json()
+            # logging.info(f"API Response: {json.dumps(response_json, indent=2)}")
+        except json.JSONDecodeError:
+            logging.info(f"API Response (non-JSON): {response.text}")
+            
+        return True
+        
+    except requests.exceptions.ConnectionError as e:
+        logging.error(f"Could not connect to the InvokeAI server at {invokeai_url}")
+        logging.error(f"Details: {e}")
+        return False
+    except requests.exceptions.Timeout:
+        logging.error("The request to the InvokeAI server timed out after 60 seconds")
+        return False
+    except requests.exceptions.HTTPError as e:
+        logging.error(f"InvokeAI API request failed with status code {e.response.status_code}")
+        logging.error(f"URL: {e.request.url}")
+        try:
+            error_json = e.response.json()
+            logging.error(f"Error Response: {json.dumps(error_json, indent=2)}")
+        except json.JSONDecodeError:
+            logging.error(f"Error Response: {e.response.text}")
+        return False
+    except Exception as e:
+        logging.error(f"An unexpected error occurred during API submission: {e}")
+        return False
+
+
+def generate_image_using_kontext_worker(game_directory: str, invokeai_url: str, board_id: str = None, prompt: str = None):
+    ''' Background worker function to upload screenshot and process with InvokeAI '''
+    try:
+        logging.info(f'Starting background image generation using kontext from directory: {game_directory}')
+        
+        # Use default prompt if none provided
+        if not prompt:
+            prompt = "make it in the style of studio ghibli anime"
+            logging.info(f'No prompt provided, using default: {prompt}')
+        else:
+            logging.info(f'Using provided prompt: {prompt}')
+        
+        # Look for common screenshot file extensions
+        screenshot_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff'}
+        
+        # Find the most recent screenshot recursively
+        latest_screenshot_path = find_most_recent_image(game_directory, screenshot_extensions)
+        
+        if not latest_screenshot_path:
+            logging.error(f'No screenshot files found in directory or subdirectories: {game_directory}')
+            return
+        
+        logging.info(f'Using most recent screenshot: {latest_screenshot_path}')
+        
+        # Step 1: Upload the image using the requests library
+        image_name = upload_image_to_invoke(latest_screenshot_path, invokeai_url, board_id)
+        
+        if not image_name:
+            logging.error('Failed to upload image to InvokeAI')
+            return
+        
+        logging.info(f'Successfully uploaded image with name: {image_name}')
+        
+        # Step 2: Modify the workflow with the prompt and image name
+        modified_workflow = modify_workflow_for_kontext(INVOKEAI_FLUX_KONTEXT_WORKFLOW, prompt, image_name)
+        
+        if not modified_workflow:
+            logging.error('Failed to modify workflow')
+            return
+        
+        # Step 3: Submit the workflow to InvokeAI
+        success = submit_workflow_to_invokeai(modified_workflow, invokeai_url)
+        
+        if success:
+            logging.info('Successfully submitted Flux Kontext workflow to InvokeAI')
+        else:
+            logging.error('Failed to submit workflow to InvokeAI')
+                
+    except Exception as e:
+        logging.error(f'Unexpected error during Flux Kontext generation: {e}')
+
+
+def generate_image_using_kontext(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
+    ''' Command handler for `generate_image_using_kontext` function
+
+    Uploads the most recent screenshot from GAME_DIRECTORY to InvokeAI and runs Flux Kontext workflow.
+
+    Args:
+        params: Function parameters (can include 'prompt')
+        context: Context information
+        system_info: System information
+
+    Returns:
+        The function return value(s)
+    '''
+    logging.info(f'Executing generate_image_using_kontext with params: {params}')
+    
+    try:
+        # Reload configuration to ensure we have the latest values
+        load_config()
+        
+        # Check if GAME_DIRECTORY is configured
+        global GAME_DIRECTORY
+        if not GAME_DIRECTORY:
+            return generate_failure_response('GAME_DIRECTORY not configured. Please set GAME_DIRECTORY in config.json')
+        
+        # Get prompt from parameters (optional)
+        prompt = params.get('prompt', '') if params else ''
+        
+        global INVOKEAI_URL
+        
+        # Start Flux Kontext generation in background thread
+        thread = threading.Thread(
+            target=generate_image_using_kontext_worker,
+            args=(GAME_DIRECTORY, INVOKEAI_URL, BOARD_ID, prompt),
+            daemon=True
+        )
+        thread.start()
+        
+        if prompt:
+            logging.info(f'Started background Flux Kontext generation thread with prompt: {prompt}')
+            return generate_success_response(f'Your Flux Kontext generation request is in progress! Using screenshot from: {GAME_DIRECTORY} with prompt: "{prompt}"')
+        else:
+            logging.info(f'Started background Flux Kontext generation thread with default prompt')
+            return generate_success_response(f'Your Flux Kontext generation request is in progress! Using screenshot from: {GAME_DIRECTORY}')
+        
+    except Exception as e:
+        logging.error(f'Error in generate_image_using_kontext: {str(e)}')
+        return generate_failure_response(f'Error in generate_image_using_kontext: {str(e)}')
 
 
 if __name__ == '__main__':

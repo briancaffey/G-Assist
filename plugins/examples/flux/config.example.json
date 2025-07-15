@@ -1,8 +1,10 @@
 {
-    "GAME_DIRECTORY": "ExampleDirectory",
+    "GAME_DIRECTORY": "D:\\ExampleDirectory\\NVIDIA",
     "NVIDIA_API_KEY": "nvapi-abc123",
     "FLUX_URL": "http://localhost:8000/v1/infer",
     "NGC_API_KEY": "abc123",
     "HF_TOKEN": "hf_abc123",
-    "LOCAL_NIM_CACHE": "~/.cache/nim"
+    "LOCAL_NIM_CACHE": "~/.cache/nim",
+    "INVOKEAI_URL": "http://localhost:9090",
+    "BOARD_ID": "optional-board-id"
 }

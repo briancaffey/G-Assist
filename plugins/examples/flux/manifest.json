@@ -67,6 +67,24 @@
           "description": "Text prompt describing the image to generate"
         }
       }
+    },
+    {
+      "name": "generate_image_using_kontext",
+      "description": "Upload the most recent screenshot to InvokeAI and run Flux Kontext workflow",
+      "tags": [
+        "image",
+        "upload",
+        "screenshot",
+        "invokeai",
+        "kontext",
+        "flux"
+      ],
+      "properties": {
+        "prompt": {
+          "type": "string",
+          "description": "Text prompt for Flux Kontext generation (optional)"
+        }
+      }
     }
   ]
 }
