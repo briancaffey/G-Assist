@@ -1,5 +1,5 @@
 {
-    "GAME_DIRECTORY": "D:\\ExampleDirectory\\NVIDIA",
+    "GAME_DIRECTORY": "D:\\NVIDIA",
     "NVIDIA_API_KEY": "nvapi-abc123",
     "FLUX_URL": "http://localhost:8000/v1/infer",
     "NGC_API_KEY": "abc123",

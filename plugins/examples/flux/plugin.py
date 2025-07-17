@@ -36,7 +36,7 @@ from typing import Optional
 # Data Types
 type Response = dict[str, any]
 
-LOG_FILE = os.path.join(os.environ.get("USERPROFILE", "."), 'python_plugin.log')
+LOG_FILE = os.path.join(os.environ.get("USERPROFILE", "."), 'flux_plugin.log')
 logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
 
 # Global configuration variables
@@ -50,6 +50,49 @@ OUTPUT_DIRECTORY = os.path.join(os.environ.get("USERPROFILE", "."), "flux_output
 FLUX_URL = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev"
 INVOKEAI_URL = "http://localhost:9090"
 BOARD_ID = None
+
+def set_desktop_background(image_path: str) -> bool:
+    """
+    Sets the specified image as the desktop background.
+    
+    Args:
+        image_path (str): Full path to the image file
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    try:
+        # Check if the image file exists
+        if not os.path.exists(image_path):
+            logging.error(f"Image file does not exist: {image_path}")
+            return False
+            
+        # Use Windows API to set the desktop background
+        SPI_SETDESKWALLPAPER = 0x0014
+        SPIF_UPDATEINIFILE = 0x01
+        SPIF_SENDCHANGE = 0x02
+        
+        # Convert the path to absolute path
+        abs_path = os.path.abspath(image_path)
+        
+        # Set the desktop background
+        result = windll.user32.SystemParametersInfoW(
+            SPI_SETDESKWALLPAPER, 
+            0, 
+            abs_path, 
+            SPIF_UPDATEINIFILE | SPIF_SENDCHANGE
+        )
+        
+        if result:
+            logging.info(f"Successfully set desktop background to: {abs_path}")
+            return True
+        else:
+            logging.error(f"Failed to set desktop background to: {abs_path}")
+            return False
+            
+    except Exception as e:
+        logging.error(f"Error setting desktop background: {e}")
+        return False
 
 def load_config():
     ''' Load configuration from config.json file '''
@@ -610,6 +653,12 @@ def generate_image_worker(prompt: str, output_dir: str, flux_url: str, nvidia_ap
                     f.write(image_bytes)
                 
                 logging.info(f'Image saved successfully: {file_path}')
+                
+                # Set the image as desktop background
+                if set_desktop_background(file_path):
+                    logging.info(f'Successfully set {file_path} as desktop background')
+                else:
+                    logging.warning(f'Failed to set {file_path} as desktop background')
             else:
                 logging.error('No artifacts found in response')
                 
