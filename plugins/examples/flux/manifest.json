@@ -109,6 +109,18 @@
         "queue"
       ],
       "properties": {}
+    },
+    {
+      "name": "invokeai_empty_model_cache",
+      "description": "Empty the InvokeAI model cache to free up VRAM",
+      "tags": [
+        "invokeai",
+        "cache",
+        "vram",
+        "memory",
+        "cleanup"
+      ],
+      "properties": {}
     }
   ]
 }

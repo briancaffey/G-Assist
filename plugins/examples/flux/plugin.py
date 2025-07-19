@@ -154,7 +154,8 @@ def main():
         'generate_image_using_kontext': generate_image_using_kontext,
         'invokeai_status': invokeai_status,
         'pause_invokeai_processor': pause_invokeai_processor,
-        'resume_invokeai_processor': resume_invokeai_processor
+        'resume_invokeai_processor': resume_invokeai_processor,
+        'invokeai_empty_model_cache': invokeai_empty_model_cache
     }
     cmd = ''
 
@@ -1392,6 +1393,60 @@ def resume_invokeai_processor(params:dict=None, context:dict=None, system_info:d
         return generate_failure_response(error_msg)
     except Exception as e:
         error_msg = f'Unexpected error resuming InvokeAI processor: {str(e)}'
+        logging.error(error_msg)
+        return generate_failure_response(error_msg)
+
+
+def invokeai_empty_model_cache(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
+    ''' Command handler for `invokeai_empty_model_cache` function
+
+    Empties the InvokeAI model cache to free up VRAM by calling the /api/v2/models/empty_model_cache endpoint.
+
+    Args:
+        params: Function parameters (not used)
+        context: Context information (not used)
+        system_info: System information (not used)
+
+    Returns:
+        The function return value indicating success or failure
+    '''
+    logging.info('Executing invokeai_empty_model_cache')
+    
+    try:
+        # Reload configuration to ensure we have the latest values
+        load_config()
+        
+        global INVOKEAI_URL
+        
+        # Construct the empty model cache endpoint URL
+        empty_cache_url = f"{INVOKEAI_URL}/api/v2/models/empty_model_cache"
+        
+        logging.info(f'Emptying InvokeAI model cache at: {empty_cache_url}')
+        
+        # Make the POST request to empty the model cache
+        response = requests.post(empty_cache_url, timeout=30)
+        
+        # Check for HTTP errors
+        response.raise_for_status()
+        
+        logging.info('Successfully emptied InvokeAI model cache')
+        
+        return generate_success_response("InvokeAI model cache has been emptied successfully")
+        
+    except requests.exceptions.ConnectionError:
+        error_msg = f"Could not connect to InvokeAI server at {INVOKEAI_URL}. Is the service running?"
+        logging.error(error_msg)
+        return generate_failure_response(error_msg)
+    except requests.exceptions.Timeout:
+        error_msg = "Request to InvokeAI server timed out"
+        logging.error(error_msg)
+        return generate_failure_response(error_msg)
+    except requests.exceptions.HTTPError as e:
+        error_msg = f"InvokeAI API request failed with status code {e.response.status_code}"
+        logging.error(error_msg)
+        return generate_failure_response(error_msg)
+    except Exception as e:
+        error_msg = f'Unexpected error emptying InvokeAI model cache: {str(e)}'
         logging.error(error_msg)
         return generate_failure_response(error_msg)
 
