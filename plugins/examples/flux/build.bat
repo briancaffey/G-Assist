@@ -63,10 +63,10 @@ if exist %VENV% (
 	if exist "%PLUGIN_DIR%\g-assist-plugin-flux.exe" (
 		copy /y "%PLUGIN_DIR%\g-assist-plugin-flux.exe" "%NVIDIA_PLUGIN_DIR%\g-assist-plugin-flux.exe"
 		if %ERRORLEVEL% EQU 0 (
-			echo g-assist-plugin-flux1.exe deployed to NVIDIA directory.
+			echo g-assist-plugin-flux.exe deployed to NVIDIA directory.
 		) else (
 			echo.
-			echo ERROR: Could not copy g-assist-plugin-flux1.exe
+			echo ERROR: Could not copy g-assist-plugin-flux.exe
 			echo The file may be in use by G-Assist. Please:
 			echo 1. Close G-Assist completely
 			echo 2. Run build.bat again

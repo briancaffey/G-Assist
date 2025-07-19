@@ -14,15 +14,6 @@
       "properties": {}
     },
     {
-      "name": "simple_test",
-      "description": "Simple test function",
-      "tags": [
-        "test",
-        "simple"
-      ],
-      "properties": {}
-    },
-    {
       "name": "check_nim_status",
       "description": "Check the status of the flux NIM server",
       "tags": [
@@ -85,6 +76,17 @@
           "description": "Text prompt for Flux Kontext generation (optional)"
         }
       }
+    },
+    {
+      "name": "invokeai_status",
+      "description": "Check the status of the InvokeAI service and display version information",
+      "tags": [
+        "invokeai",
+        "status",
+        "version",
+        "health"
+      ],
+      "properties": {}
     }
   ]
 }

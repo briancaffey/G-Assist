@@ -41,7 +41,7 @@ logging.basicConfig(filename=LOG_FILE, level=logging.INFO, format="%(asctime)s -
 
 # Global configuration variables
 CONFIG_FILE = os.path.join(f'{os.environ.get("PROGRAMDATA", ".")}{r'\NVIDIA Corporation\nvtopps\rise\plugins\flux'}', 'config.json')
-GAME_DIRECTORY = None
+GALLERY_DIRECTORY = None
 NVIDIA_API_KEY = None
 NGC_API_KEY = None
 HF_TOKEN = None
@@ -96,11 +96,11 @@ def set_desktop_background(image_path: str) -> bool:
 
 def load_config():
     ''' Load configuration from config.json file '''
-    global GAME_DIRECTORY, NVIDIA_API_KEY, NGC_API_KEY, HF_TOKEN, LOCAL_NIM_CACHE, OUTPUT_DIRECTORY, FLUX_URL, INVOKEAI_URL, BOARD_ID
+    global GALLERY_DIRECTORY, NVIDIA_API_KEY, NGC_API_KEY, HF_TOKEN, LOCAL_NIM_CACHE, OUTPUT_DIRECTORY, FLUX_URL, INVOKEAI_URL, BOARD_ID
     try:
         with open(CONFIG_FILE, 'r') as f:
             config = json.load(f)
-            GAME_DIRECTORY = config.get('GAME_DIRECTORY', None)
+            GALLERY_DIRECTORY = config.get('GALLERY_DIRECTORY', None)
             NVIDIA_API_KEY = config.get('NVIDIA_API_KEY', None)
             NGC_API_KEY = config.get('NGC_API_KEY', None)
             HF_TOKEN = config.get('HF_TOKEN', None)
@@ -135,7 +135,6 @@ def main():
     CONTEXT_PROPERTY = 'messages'
     SYSTEM_INFO_PROPERTY = 'system_info'  # Added for game information
     FUNCTION_PROPERTY = 'func'
-    PARAMS_PROPERTY = 'properties'
     INITIALIZE_COMMAND = 'initialize'
     SHUTDOWN_COMMAND = 'shutdown'
 
@@ -147,12 +146,12 @@ def main():
         'initialize': execute_initialize_command,
         'shutdown': execute_shutdown_command,
         'test_function': test_function,
-        'simple_test': simple_test,
         'check_nim_status': check_nim_status,
         'stop_nim': stop_nim,
         'start_nim': start_nim,
         'generate_image': generate_image,
-        'generate_image_using_kontext': generate_image_using_kontext
+        'generate_image_using_kontext': generate_image_using_kontext,
+        'invokeai_status': invokeai_status
     }
     cmd = ''
 
@@ -419,30 +418,6 @@ def test_function(params:dict=None, context:dict=None, system_info:dict=None) ->
         return generate_failure_response(f'Error in test_function: {str(e)}')
 
 
-def simple_test(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
-    ''' Command handler for `simple_test` function
-
-    Simple test function that doesn't use RISE API.
-
-    Args:
-        params: Function parameters
-        context: Context information
-        system_info: System information
-
-    Returns:
-        The function return value(s)
-    '''
-    logging.info(f'Executing simple_test with params: {params}')
-
-    try:
-        logging.info('Simple test function executed successfully')
-        return generate_success_response('Simple test function works!')
-
-    except Exception as e:
-        logging.error(f'Error in simple_test: {str(e)}')
-        return generate_failure_response(f'Error in simple_test: {str(e)}')
-
-
 def check_nim_status(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
     ''' Command handler for `check_nim_status` function
 
@@ -506,7 +481,7 @@ def stop_nim(params:dict=None, context:dict=None, system_info:dict=None) -> dict
     try:
         # Stop the nim-server container using WSL and podman
         logging.info('Stopping nim-server container...')
-        stop_cmd = ['wsl', '-d', 'NVIDIA-Workbench', 'podman', 'stop', 'nim-server']
+        stop_cmd = ['wsl', '-d', 'NVIDIA-Workbench', 'podman', 'kill', 'nim-server']
 
         try:
             result = subprocess.run(stop_cmd, check=True, capture_output=True, text=True)
@@ -1116,10 +1091,10 @@ def submit_workflow_to_invokeai(workflow_data, invokeai_url):
         return False
 
 
-def generate_image_using_kontext_worker(game_directory: str, invokeai_url: str, board_id: str = None, prompt: str = None):
+def generate_image_using_kontext_worker(GALLERY_DIRECTORY: str, invokeai_url: str, board_id: str = None, prompt: str = None):
     ''' Background worker function to upload screenshot and process with InvokeAI '''
     try:
-        logging.info(f'Starting background image generation using kontext from directory: {game_directory}')
+        logging.info(f'Starting background image generation using kontext from directory: {GALLERY_DIRECTORY}')
         
         # Use default prompt if none provided
         if not prompt:
@@ -1132,10 +1107,10 @@ def generate_image_using_kontext_worker(game_directory: str, invokeai_url: str, 
         screenshot_extensions = {'.png', '.jpg', '.jpeg', '.bmp', '.tiff'}
         
         # Find the most recent screenshot recursively
-        latest_screenshot_path = find_most_recent_image(game_directory, screenshot_extensions)
+        latest_screenshot_path = find_most_recent_image(GALLERY_DIRECTORY, screenshot_extensions)
         
         if not latest_screenshot_path:
-            logging.error(f'No screenshot files found in directory or subdirectories: {game_directory}')
+            logging.error(f'No screenshot files found in directory or subdirectories: {GALLERY_DIRECTORY}')
             return
         
         logging.info(f'Using most recent screenshot: {latest_screenshot_path}')
@@ -1171,7 +1146,7 @@ def generate_image_using_kontext_worker(game_directory: str, invokeai_url: str, 
 def generate_image_using_kontext(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
     ''' Command handler for `generate_image_using_kontext` function
 
-    Uploads the most recent screenshot from GAME_DIRECTORY to InvokeAI and runs Flux Kontext workflow.
+    Uploads the most recent screenshot from GALLERY_DIRECTORY to InvokeAI and runs Flux Kontext workflow.
 
     Args:
         params: Function parameters (can include 'prompt')
@@ -1187,10 +1162,10 @@ def generate_image_using_kontext(params:dict=None, context:dict=None, system_inf
         # Reload configuration to ensure we have the latest values
         load_config()
         
-        # Check if GAME_DIRECTORY is configured
-        global GAME_DIRECTORY
-        if not GAME_DIRECTORY:
-            return generate_failure_response('GAME_DIRECTORY not configured. Please set GAME_DIRECTORY in config.json')
+        # Check if GALLERY_DIRECTORY is configured
+        global GALLERY_DIRECTORY
+        if not GALLERY_DIRECTORY:
+            return generate_failure_response('GALLERY_DIRECTORY not configured. Please set GALLERY_DIRECTORY in config.json')
         
         # Get prompt from parameters (optional)
         prompt = params.get('prompt', '') if params else ''
@@ -1200,21 +1175,92 @@ def generate_image_using_kontext(params:dict=None, context:dict=None, system_inf
         # Start Flux Kontext generation in background thread
         thread = threading.Thread(
             target=generate_image_using_kontext_worker,
-            args=(GAME_DIRECTORY, INVOKEAI_URL, BOARD_ID, prompt),
+            args=(GALLERY_DIRECTORY, INVOKEAI_URL, BOARD_ID, prompt),
             daemon=True
         )
         thread.start()
         
         if prompt:
             logging.info(f'Started background Flux Kontext generation thread with prompt: {prompt}')
-            return generate_success_response(f'Your Flux Kontext generation request is in progress! Using screenshot from: {GAME_DIRECTORY} with prompt: "{prompt}"')
+            return generate_success_response(f'Your Flux Kontext generation request is in progress! Using screenshot from: {GALLERY_DIRECTORY} with prompt: "{prompt}"')
         else:
             logging.info(f'Started background Flux Kontext generation thread with default prompt')
-            return generate_success_response(f'Your Flux Kontext generation request is in progress! Using screenshot from: {GAME_DIRECTORY}')
+            return generate_success_response(f'Your Flux Kontext generation request is in progress! Using screenshot from: {GALLERY_DIRECTORY}')
         
     except Exception as e:
         logging.error(f'Error in generate_image_using_kontext: {str(e)}')
         return generate_failure_response(f'Error in generate_image_using_kontext: {str(e)}')
+
+
+def invokeai_status(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
+    ''' Command handler for `invokeai_status` function
+
+    Checks the status of the InvokeAI service by calling the /api/v1/app/version endpoint.
+
+    Args:
+        params: Function parameters (not used)
+        context: Context information (not used)
+        system_info: System information (not used)
+
+    Returns:
+        The function return value with InvokeAI version information
+    '''
+    logging.info('Executing invokeai_status')
+    
+    try:
+        # Reload configuration to ensure we have the latest values
+        load_config()
+        
+        global INVOKEAI_URL
+        
+        # Construct the version endpoint URL
+        version_url = f"{INVOKEAI_URL}/api/v1/app/version"
+        
+        logging.info(f'Checking InvokeAI status at: {version_url}')
+        
+        # Make the request to the version endpoint
+        response = requests.get(version_url, timeout=10)
+        
+        # Check for HTTP errors
+        response.raise_for_status()
+        
+        # Parse the JSON response
+        version_data = response.json()
+        
+        # Extract the version from the response
+        version = version_data.get('version', 'Unknown')
+        highlights = version_data.get('highlights', [])
+        
+        logging.info(f'InvokeAI version: {version}')
+        
+        # Create a formatted response message
+        message = f"InvokeAI service is running. Version: {version}"
+        
+        if highlights:
+            message += f"\nHighlights: {', '.join(highlights)}"
+        
+        return generate_success_response(message)
+        
+    except requests.exceptions.ConnectionError:
+        error_msg = f"Could not connect to InvokeAI server at {INVOKEAI_URL}. Is the service running?"
+        logging.error(error_msg)
+        return generate_failure_response(error_msg)
+    except requests.exceptions.Timeout:
+        error_msg = "Request to InvokeAI server timed out"
+        logging.error(error_msg)
+        return generate_failure_response(error_msg)
+    except requests.exceptions.HTTPError as e:
+        error_msg = f"InvokeAI API request failed with status code {e.response.status_code}"
+        logging.error(error_msg)
+        return generate_failure_response(error_msg)
+    except json.JSONDecodeError as e:
+        error_msg = f"Failed to parse InvokeAI response: {e}"
+        logging.error(error_msg)
+        return generate_failure_response(error_msg)
+    except Exception as e:
+        error_msg = f'Unexpected error checking InvokeAI status: {str(e)}'
+        logging.error(error_msg)
+        return generate_failure_response(error_msg)
 
 
 if __name__ == '__main__':
