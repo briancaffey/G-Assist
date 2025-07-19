@@ -151,7 +151,9 @@ def main():
         'start_nim': start_nim,
         'generate_image': generate_image,
         'generate_image_using_kontext': generate_image_using_kontext,
-        'invokeai_status': invokeai_status
+        'invokeai_status': invokeai_status,
+        'pause_invokeai_processor': pause_invokeai_processor,
+        'resume_invokeai_processor': resume_invokeai_processor
     }
     cmd = ''
 
@@ -1259,6 +1261,114 @@ def invokeai_status(params:dict=None, context:dict=None, system_info:dict=None) 
         return generate_failure_response(error_msg)
     except Exception as e:
         error_msg = f'Unexpected error checking InvokeAI status: {str(e)}'
+        logging.error(error_msg)
+        return generate_failure_response(error_msg)
+
+
+def pause_invokeai_processor(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
+    ''' Command handler for `pause_invokeai_processor` function
+
+    Pauses the InvokeAI processor by calling the /api/v1/queue/default/processor/pause endpoint.
+
+    Args:
+        params: Function parameters (not used)
+        context: Context information (not used)
+        system_info: System information (not used)
+
+    Returns:
+        The function return value indicating success or failure
+    '''
+    logging.info('Executing pause_invokeai_processor')
+    
+    try:
+        # Reload configuration to ensure we have the latest values
+        load_config()
+        
+        global INVOKEAI_URL
+        
+        # Construct the pause endpoint URL
+        pause_url = f"{INVOKEAI_URL}/api/v1/queue/default/processor/pause"
+        
+        logging.info(f'Pausing InvokeAI processor at: {pause_url}')
+        
+        # Make the PUT request to pause the processor
+        response = requests.put(pause_url, timeout=10)
+        
+        # Check for HTTP errors
+        response.raise_for_status()
+        
+        logging.info('Successfully paused InvokeAI processor')
+        
+        return generate_success_response("InvokeAI processor has been paused successfully")
+        
+    except requests.exceptions.ConnectionError:
+        error_msg = f"Could not connect to InvokeAI server at {INVOKEAI_URL}. Is the service running?"
+        logging.error(error_msg)
+        return generate_failure_response(error_msg)
+    except requests.exceptions.Timeout:
+        error_msg = "Request to InvokeAI server timed out"
+        logging.error(error_msg)
+        return generate_failure_response(error_msg)
+    except requests.exceptions.HTTPError as e:
+        error_msg = f"InvokeAI API request failed with status code {e.response.status_code}"
+        logging.error(error_msg)
+        return generate_failure_response(error_msg)
+    except Exception as e:
+        error_msg = f'Unexpected error pausing InvokeAI processor: {str(e)}'
+        logging.error(error_msg)
+        return generate_failure_response(error_msg)
+
+
+def resume_invokeai_processor(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
+    ''' Command handler for `resume_invokeai_processor` function
+
+    Resumes the InvokeAI processor by calling the /api/v1/queue/default/processor/resume endpoint.
+
+    Args:
+        params: Function parameters (not used)
+        context: Context information (not used)
+        system_info: System information (not used)
+
+    Returns:
+        The function return value indicating success or failure
+    '''
+    logging.info('Executing resume_invokeai_processor')
+    
+    try:
+        # Reload configuration to ensure we have the latest values
+        load_config()
+        
+        global INVOKEAI_URL
+        
+        # Construct the resume endpoint URL
+        resume_url = f"{INVOKEAI_URL}/api/v1/queue/default/processor/resume"
+        
+        logging.info(f'Resuming InvokeAI processor at: {resume_url}')
+        
+        # Make the PUT request to resume the processor
+        response = requests.put(resume_url, timeout=10)
+        
+        # Check for HTTP errors
+        response.raise_for_status()
+        
+        logging.info('Successfully resumed InvokeAI processor')
+        
+        return generate_success_response("InvokeAI processor has been resumed successfully")
+        
+    except requests.exceptions.ConnectionError:
+        error_msg = f"Could not connect to InvokeAI server at {INVOKEAI_URL}. Is the service running?"
+        logging.error(error_msg)
+        return generate_failure_response(error_msg)
+    except requests.exceptions.Timeout:
+        error_msg = "Request to InvokeAI server timed out"
+        logging.error(error_msg)
+        return generate_failure_response(error_msg)
+    except requests.exceptions.HTTPError as e:
+        error_msg = f"InvokeAI API request failed with status code {e.response.status_code}"
+        logging.error(error_msg)
+        return generate_failure_response(error_msg)
+    except Exception as e:
+        error_msg = f'Unexpected error resuming InvokeAI processor: {str(e)}'
         logging.error(error_msg)
         return generate_failure_response(error_msg)
 

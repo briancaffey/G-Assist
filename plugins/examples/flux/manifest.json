@@ -87,6 +87,28 @@
         "health"
       ],
       "properties": {}
+    },
+    {
+      "name": "pause_invokeai_processor",
+      "description": "Pause the InvokeAI processor queue",
+      "tags": [
+        "invokeai",
+        "processor",
+        "pause",
+        "queue"
+      ],
+      "properties": {}
+    },
+    {
+      "name": "resume_invokeai_processor",
+      "description": "Resume the InvokeAI processor queue",
+      "tags": [
+        "invokeai",
+        "processor",
+        "resume",
+        "queue"
+      ],
+      "properties": {}
     }
   ]
 }
