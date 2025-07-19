@@ -47,7 +47,8 @@ NGC_API_KEY = None
 HF_TOKEN = None
 LOCAL_NIM_CACHE = None
 OUTPUT_DIRECTORY = os.path.join(os.environ.get("USERPROFILE", "."), "flux_output")
-FLUX_URL = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev"
+BUILD_NVIDIA_COM_FLUX_HOSTED_NIM = "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev"
+FLUX_NIM_URL = None
 INVOKEAI_URL = "http://localhost:9090"
 BOARD_ID = None
 
@@ -96,7 +97,7 @@ def set_desktop_background(image_path: str) -> bool:
 
 def load_config():
     ''' Load configuration from config.json file '''
-    global GALLERY_DIRECTORY, NVIDIA_API_KEY, NGC_API_KEY, HF_TOKEN, LOCAL_NIM_CACHE, OUTPUT_DIRECTORY, FLUX_URL, INVOKEAI_URL, BOARD_ID
+    global GALLERY_DIRECTORY, NVIDIA_API_KEY, NGC_API_KEY, HF_TOKEN, LOCAL_NIM_CACHE, OUTPUT_DIRECTORY, FLUX_NIM_URL, INVOKEAI_URL, BOARD_ID
     try:
         with open(CONFIG_FILE, 'r') as f:
             config = json.load(f)
@@ -106,7 +107,7 @@ def load_config():
             HF_TOKEN = config.get('HF_TOKEN', None)
             LOCAL_NIM_CACHE = config.get('LOCAL_NIM_CACHE', None)
             OUTPUT_DIRECTORY = config.get('OUTPUT_DIRECTORY', OUTPUT_DIRECTORY)
-            FLUX_URL = config.get('FLUX_URL', "https://ai.api.nvidia.com/v1/genai/black-forest-labs/flux.1-dev")
+            FLUX_NIM_URL = config.get('FLUX_NIM_URL', BUILD_NVIDIA_COM_FLUX_HOSTED_NIM)
             INVOKEAI_URL = config.get('INVOKEAI_URL', "http://localhost:9090")
             BOARD_ID = config.get('BOARD_ID', None)
             logging.info('Configuration loaded successfully')
@@ -362,7 +363,7 @@ def execute_shutdown_command() -> dict:
 def test_function(params:dict=None, context:dict=None, system_info:dict=None) -> dict:
     ''' Command handler for `test_function` function
 
-    Tests health endpoints on localhost:8000.
+    Tests health endpoints using the configured FLUX_NIM_URL.
 
     Args:
         params: Function parameters
@@ -375,9 +376,25 @@ def test_function(params:dict=None, context:dict=None, system_info:dict=None) ->
     logging.info(f'Executing test_function with params: {params}')
 
     try:
+        # Reload configuration to ensure we have the latest values
+        load_config()
+        
+        # Get the base URL from configuration
+        global FLUX_NIM_URL
+        if not FLUX_NIM_URL:
+            return generate_failure_response('FLUX_NIM_URL not configured. Please set FLUX_NIM_URL in config.json')
+        
+        # Check if using NVIDIA hosted service
+        if FLUX_NIM_URL.startswith("https://ai.api.nvidia.com"):
+            logging.info('Using NVIDIA hosted Flux service - no health check needed')
+            return generate_success_response('Using NVIDIA hosted Flux service')
+        
+        # Extract base URL for health endpoints (remove /v1/infer if present for local servers)
+        base_url = FLUX_NIM_URL
+        
         # Step 1: Test live endpoint
         logging.info('Testing /v1/health/live endpoint...')
-        live_url = 'http://localhost:8000/v1/health/live'
+        live_url = f'{base_url}/v1/health/live'
 
         try:
             with urllib.request.urlopen(live_url, timeout=5) as response:
@@ -394,7 +411,7 @@ def test_function(params:dict=None, context:dict=None, system_info:dict=None) ->
 
         # Step 2: Test ready endpoint
         logging.info('Testing /v1/health/ready endpoint...')
-        ready_url = 'http://localhost:8000/v1/health/ready'
+        ready_url = f'{base_url}/v1/health/ready'
 
         try:
             with urllib.request.urlopen(ready_url, timeout=5) as response:
@@ -588,7 +605,7 @@ def generate_image_worker(prompt: str, output_dir: str, flux_url: str, nvidia_ap
             "cfg_scale": 5,
             "mode": "base",
             "samples": 1,
-            "seed": 0,
+            "seed": 0, # random seed
             "steps": 50,
             "prompt": prompt
         }
@@ -604,9 +621,16 @@ def generate_image_worker(prompt: str, output_dir: str, flux_url: str, nvidia_ap
         
         # Convert payload to JSON
         json_payload = json.dumps(payload)
+
+        # For NVIDIA API endpoints, use the URL as-is (it already includes the full endpoint)
+        # For local NIM servers, append /v1/infer to the base URL
+        if flux_url.startswith("https://ai.api.nvidia.com"):
+            FLUX_INFER_URL = flux_url
+        else:
+            FLUX_INFER_URL = f"{flux_url}/v1/infer"
         
         # Create request
-        req = urllib.request.Request(flux_url, data=json_payload.encode('utf-8'), headers=headers, method='POST')
+        req = urllib.request.Request(FLUX_INFER_URL, data=json_payload.encode('utf-8'), headers=headers, method='POST')
         
         # Send request
         with urllib.request.urlopen(req, timeout=300) as response:  # Increased timeout to 5 minutes
@@ -668,10 +692,11 @@ def generate_image(params:dict=None, context:dict=None, system_info:dict=None) -
         # Reload configuration to ensure we have the latest values
         load_config()
         
-        # Check if NVIDIA API key is configured
-        global NVIDIA_API_KEY
-        if not NVIDIA_API_KEY or NVIDIA_API_KEY == "YOUR_NVIDIA_API_KEY_HERE":
-            return generate_failure_response('NVIDIA API key not configured. Please set NVIDIA_API_KEY in config.json')
+        # Check if NVIDIA API key is configured (only required for NVIDIA API endpoints)
+        global NVIDIA_API_KEY, FLUX_NIM_URL
+        if FLUX_NIM_URL.startswith("https://ai.api.nvidia.com"):
+            if not NVIDIA_API_KEY or NVIDIA_API_KEY == "YOUR_NVIDIA_API_KEY_HERE" or not NVIDIA_API_KEY.startswith("nvapi-"):
+                return generate_failure_response('NVIDIA API key not configured or invalid. Please set a valid NVIDIA_API_KEY (starting with "nvapi-") in config.json')
         
         # Get prompt from parameters (optional)
         prompt = params.get('prompt', '') if params else ''
@@ -686,12 +711,10 @@ def generate_image(params:dict=None, context:dict=None, system_info:dict=None) -
         os.makedirs(OUTPUT_DIRECTORY, exist_ok=True)
         logging.info(f'Output directory: {OUTPUT_DIRECTORY}')
         
-        global FLUX_URL
-        
         # Start image generation in background thread
         thread = threading.Thread(
             target=generate_image_worker,
-            args=(prompt, OUTPUT_DIRECTORY, FLUX_URL, NVIDIA_API_KEY),
+            args=(prompt, OUTPUT_DIRECTORY, FLUX_NIM_URL, NVIDIA_API_KEY),
             daemon=True
         )
         thread.start()
